@@ -3,7 +3,6 @@ pandas
 nltk
 Sastrawi
 gensim
-sklearn
 scikit-learn
 seaborn
 streamlit
