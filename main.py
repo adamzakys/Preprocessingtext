@@ -10,6 +10,9 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from gensim import corpora
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 
 nltk.download("punkt")
 nltk.download("stopwords")
@@ -32,6 +35,12 @@ def stem_text(text):
 st.sidebar.title("Clustering Options")
 clustering_method = st.sidebar.selectbox("Pilih modeling yang akan di Clustering", ["LDA", "TF-IDF"])
 n_clusters = st.sidebar.slider("Pilih jumlah Cluster", min_value=2, max_value=10, value=3)
+enable_stemming = st.sidebar.checkbox("Aktifkan Stemming (TF-IDF)", value=False)
+
+# Data selection options
+data_size_option = st.sidebar.radio("Pilih berapa banyak data yang digunakan", ["Semua Data", "Sebagian Data"])
+if data_size_option == "Sebagian Data":
+    data_fraction = st.sidebar.slider("Fraksi Data yang Digunakan", min_value=0.1, max_value=1.0, value=1.0, step=0.1)
 
 # Upload and preprocess data
 st.title("Preprocessing dan Clustering Modeling Topik Tugas akhir skripsi mahasiswa UTM dengan sumber pta.trunojoyo.ac.id")
@@ -43,39 +52,44 @@ uploaded_file = st.file_uploader("Upload dokumen CSV", type=["csv"])
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
 
+    # Data size selection
+    if data_size_option == "Sebagian Data":
+        data_fraction = int(len(df) * data_fraction)
+        df = df.iloc[:data_fraction]  # Mengambil data dalam urutan sesuai indeks
+
     # Display the original data
     st.subheader("Original Data")
     st.dataframe(df)
 
-    # Preprocess the text data and create a 'processed_abstrak' column
+    # Preprocess the text data and create an 'abstrak' column
     st.subheader("Preprocessing Steps:")
     st.write("1. Text Tokenization")
 
-    df['processed_abstrak'] = df['Abstrak'].apply(lambda x: nltk.word_tokenize(x) if isinstance(x, str) else [])
+    df['abstrak'] = df['abstrak'].apply(lambda x: nltk.word_tokenize(x) if isinstance(x, str) else [])
 
-    st.dataframe(df[['Judul', 'processed_abstrak']])
+    st.dataframe(df[['judul', 'abstrak']])
 
     st.write("2. Punctuation Removal")
-    df['processed_abstrak'] = df['processed_abstrak'].apply(lambda tokens: [re.sub(r'[.,():-]', '', token) for token in tokens])
-    
-    st.dataframe(df[['Judul', 'processed_abstrak']])
+    df['abstrak'] = df['abstrak'].apply(lambda tokens: [re.sub(r'[.,():-]', '', token) for token in tokens])
+
+    st.dataframe(df[['judul', 'abstrak']])
 
     st.write("3. Stopword Removal")
     stop_words = set(stopwords.words("indonesian"))
-    df['processed_abstrak'] = df['processed_abstrak'].apply(lambda tokens: [token for token in tokens if token.lower() not in stop_words])
+    df['abstrak'] = df['abstrak'].apply(lambda tokens: [token for token in tokens if token.lower() not in stop_words])
 
-    st.dataframe(df[['Judul', 'processed_abstrak']])
+    st.dataframe(df[['judul', 'abstrak']])
 
     # LDA section
     if clustering_method == "LDA":
         # Process and analyze using LDA
         st.title("LDA Clustering")
 
-        # Check if 'processed_abstrak' column contains lists or strings
-        if df['processed_abstrak'].apply(lambda x: isinstance(x, list)).all():
-            documents = df['processed_abstrak']
+        # Check if 'abstrak' column contains lists or strings
+        if df['abstrak'].apply(lambda x: isinstance(x, list)).all():
+            documents = df['abstrak']
         else:
-            documents = df['processed_abstrak'].apply(lambda x: x.split())
+            documents = df['abstrak'].apply(lambda x: x.split())
 
         dictionary = corpora.Dictionary(documents)
         corpus = [dictionary.doc2bow(doc) for doc in documents]
@@ -90,10 +104,10 @@ if uploaded_file is not None:
 
         document_topic_proposals = [lda_model.get_document_topics(doc) for doc in corpus]
 
-        document_topic_proposals_df = pd.DataFrame(columns=["Judul"] + [f"Topic {i+1}" for i in range(lda_model.num_topics)])
+        document_topic_proposals_df = pd.DataFrame(columns=["judul"] + [f"Topic {i+1}" for i in range(lda_model.num_topics)])
 
         for i, doc_topic_proposals in enumerate(document_topic_proposals):
-            row_data = {"Judul": df['Judul'].iloc[i]}
+            row_data = {"judul": df['judul'].iloc[i]}
             for topic, prop in doc_topic_proposals:
                 row_data[f"Topic {topic + 1}"] = prop
             document_topic_proposals_df = pd.concat([document_topic_proposals_df, pd.DataFrame([row_data])], ignore_index=True)
@@ -110,41 +124,86 @@ if uploaded_file is not None:
         document_topic_proposals_df['Cluster_LDA'] = kmeans_lda.labels_
 
         st.write("Cluster Results:")
-        st.dataframe(document_topic_proposals_df[['Judul', 'Cluster_LDA']])
+        st.dataframe(document_topic_proposals_df[['judul', 'Cluster_LDA']])
         st.write(f"Silhouette Score for LDA: {silhouette_lda}")
 
+        # Classification
+        st.title("Klasifikasi")
+        X = document_topic_proposals_df.drop(['judul', 'Cluster_LDA'], axis=1)
+        y = df['label-topic']
+
+        # Split data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        # Initialize and train a K-Nearest Neighbors (KNN) classifier
+        knn_classifier = KNeighborsClassifier(n_neighbors=5)  # You can adjust the number of neighbors as needed
+        knn_classifier.fit(X_train, y_train)
+
+        # Make predictions
+        y_pred = knn_classifier.predict(X_test)
+
+        # Calculate accuracy
+        accuracy = accuracy_score(y_test, y_pred)
+        st.write(f"Accuracy of K-Nearest Neighbors Classifier: {accuracy:.2f}")
+
+
     elif clustering_method == "TF-IDF":
-        # Process and analyze using TF-IDF with stemming
-        st.title("TF-IDF Clustering with Stemming")
-        documents_tfidf = df['Abstrak']  # Use 'Abstrak' column for TF-IDF
+        # Process and analyze using TF-IDF
+        st.title("TF-IDF Clustering")
 
-        # Apply stemming
-        stemmed_documents = [stem_text(text) for text in documents_tfidf]
-        documents_tfidf = stemmed_documents
+        documents_tfidf = df['abstrak']  # Use 'abstrak' column for TF-IDF
 
-        # Display the stemmed text
-        st.subheader("Stemming Output:")
-        st.write("Stemming is applied to the 'Abstrak' column:")
-        st.dataframe(pd.DataFrame({'Abstrak': documents_tfidf, 'Stemmed Abstrak': stemmed_documents}))
+        if enable_stemming:
+            # Apply stemming
+            if df['abstrak'].apply(lambda x: isinstance(x, list)).all():
+                stemmed_documents = [' '.join(x) for x in df['abstrak']]
+            else:
+                stemmed_documents = [stem_text(text) for text in documents_tfidf]
+            documents_tfidf = stemmed_documents
+        else:
+            documents_tfidf = df['abstrak']  # Use the original 'abstrak' column
+
+        # Display the stemmed text if stemming is enabled
+        if enable_stemming:
+            st.subheader("Stemming Output:")
+            st.write("Stemming is applied to the 'abstrak' column:")
+            st.dataframe(pd.DataFrame({'abstrak': df['abstrak'], 'Stemmed abstrak': stemmed_documents}))
 
         tfidfvectorizer = TfidfVectorizer(analyzer='word', stop_words='english')
         tfidf_wm = tfidfvectorizer.fit_transform(documents_tfidf)
         tfidf_tokens = tfidfvectorizer.get_feature_names_out()
 
         df_tfidfvect = pd.DataFrame(data=tfidf_wm.toarray(), columns=tfidf_tokens)
-        df_tfidfvect.insert(0, 'Judul', df['Judul'])
+        df_tfidfvect.insert(0, 'judul', df['judul'])
 
-        st.write("Stemmed TF-IDF Vectorizer:")
+        st.write("TF-IDF Vectorizer:")
         st.dataframe(df_tfidfvect)
 
         kmeans_tfidf = KMeans(n_clusters=n_clusters, random_state=0, n_init=10)
-        kmeans_tfidf.fit(tfidf_wm)
-        silhouette_tfidf = silhouette_score(tfidf_wm, kmeans_tfidf.labels_)
+        kmeans_tfidf.fit(df_tfidfvect.iloc[:, 1:])
+        silhouette_tfidf = silhouette_score(df_tfidfvect.iloc[:, 1:], kmeans_tfidf.labels_)
 
         df_tfidfvect['Cluster_TFIDF'] = kmeans_tfidf.labels_
 
         st.write("Cluster Results:")
-        st.dataframe(df_tfidfvect[['Judul', 'Cluster_TFIDF']])
+        st.dataframe(df_tfidfvect[['judul', 'Cluster_TFIDF']])
         st.write(f"Silhouette Score for TF-IDF: {silhouette_tfidf}")
 
-    
+        # Classification
+        st.title("Klasifikasi")
+        X = df_tfidfvect.drop(['judul', 'Cluster_TFIDF'], axis=1)
+        y = df['label-topic']
+
+        # Split data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        # Initialize and train a K-Nearest Neighbors (KNN) classifier
+        knn_classifier = KNeighborsClassifier(n_neighbors=5)  # You can adjust the number of neighbors as needed
+        knn_classifier.fit(X_train, y_train)
+
+        # Make predictions
+        y_pred = knn_classifier.predict(X_test)
+
+        # Calculate accuracy
+        accuracy = accuracy_score(y_test, y_pred)
+        st.write(f"Accuracy of K-Nearest Neighbors Classifier: {accuracy:.2f}")
